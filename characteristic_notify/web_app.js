@@ -18,7 +18,7 @@
 const testService = '02fc549a-244c-11eb-adc1-0242ac120002';
 // The test characteristic defined in device_code.js
 const testCharacteristic = '02fc549a-244c-11eb-adc1-0242ac120002';
-const requiredNumUpdates = 100;
+const requiredNumUpdates = 10000;
 
 /**
  * Load the device code to the Espruino IDE.
@@ -45,6 +45,13 @@ async function startTest() {
   let notifyCharacteristic = undefined;
   let updateNum = 0;
   let lastValue = null;
+  let numMissedValues = 0;
+  let numShortPackets = 0;
+  let progressTimer;
+
+  const logStatus = () => {
+    logInfo(`${updateNum} of ${requiredNumUpdates} (${100 * updateNum / requiredNumUpdates}%), missed: ${numMissedValues}, short: ${numShortPackets}`);
+  };
 
   const resetTest = async () => {
     if (notifyCharacteristic) {
@@ -56,12 +63,31 @@ async function startTest() {
     }
     $('btn_start_test').disabled = false;
     $('btn_load_code').disabled = false;
+    if (progressTimer)
+      window.clearInterval(progressTimer);
   }
 
-  const checkCharacteristicValue = (value) => {
+  const checkCharacteristicValue = (dataView) => {
+    const value = dataView.getUint32(0, /*littleEndian=*/true);
     if (value > 9999) {
       throw `Invalid characteristic value ${value}. Should be val <= 9999.`;
     }
+
+    const val2 = dataView.getUint32(4, /*littleEndian=*/true);
+    if (val2 != 1) {
+      throw `Invalid second value ${val2}. Should be 1.`;
+    }
+
+    if (dataView.byteLength == 240) {
+      const val3 = dataView.getUint32(240-4, /*littleEndian=*/true);
+      if (val3 != 59) {
+        throw `Invalid last value ${val3}. Should be 59.`;
+      }
+    } else {
+      //logError(`Expected dataView to be 240 bytes, but was ${dataView.byteLength}.`);
+      numShortPackets += 1;
+    }
+
     if (!lastValue) {
       return;
     }
@@ -72,18 +98,30 @@ async function startTest() {
       return;
     }
     if (value !== (lastValue + 1)) {
-      throw `Expected characteristic value ${lastValue + 1}, actual ${value}.`;
+      numMissedValues += 1;
+      //throw `Expected characteristic value ${lastValue + 1}, actual ${value}.`;
     }
   }
 
-  const onCharacteristicChanged = (evt) => {
+  const onCharacteristicChanged = async (evt) => {
     updateNum += 1;
     try {
       const characteristic = evt.target;
-      const dataView = characteristic.value;
-      const val = dataView.getUint32(0, /*littleEndian=*/true);
-      checkCharacteristicValue(val);
-      lastValue = val;
+
+      // characteristic.value only contains (up to) the first 20 bytes of
+      // the actual characteristic value. Not sure if this is as-per the
+      // BLE, Web Bluetooth specification, or a Espruino thing.
+      let dataView = characteristic.value;
+
+      if (false) {
+        // Reading the characteristic value in a characteristic value
+        // notification closure causes repeated invocations of the this
+        // function.
+        const dataView = await characteristic.readValue();
+        dataView = characteristic.value;
+      }
+      checkCharacteristicValue(dataView);
+      lastValue = dataView.getUint32(0, /*littleEndian=*/true);
       if (updateNum == requiredNumUpdates) {
         logInfo('Test success.');
       }
@@ -115,14 +153,11 @@ async function startTest() {
     logInfo(`Got service, requesting characteristic ${testCharacteristic}...`);
     const characteristic = await service.getCharacteristic(testCharacteristic);
 
-    logInfo(`Got characteristic, reading value...`);
-    let dataView = await characteristic.readValue();
-    let val = dataView.getUint32(0, /*littleEndian=*/true);
-    checkCharacteristicValue(val);
-
     notifyCharacteristic = await characteristic.startNotifications();
     notifyCharacteristic.addEventListener(
       'characteristicvaluechanged', onCharacteristicChanged);
+
+    progressTimer = setInterval(logStatus, 5000);
   } catch (error) {
     logError(`Unexpected failure: ${error}`);
     resetTest();

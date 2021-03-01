@@ -14,7 +14,9 @@
  *  limitations under the License.
  */
 
-const data = new Uint32Array([1]);
+const numInts = 60;
+const values = Array.apply(null, Array(numInts)).map(function(x, y) { return y; });
+const data = new Uint32Array(values);
 let isConnected = false;
 let debug = '?';
 
@@ -87,5 +89,5 @@ function onInit() {
   updateScreen();
 
   setInterval(updateScreen, 1000);
-  setInterval(updateValue, 40);
+  setInterval(updateValue, 50);
 }
